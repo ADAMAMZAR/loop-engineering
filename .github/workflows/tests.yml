@@ -29,3 +29,5 @@ jobs:
           test_audit_replay
           test_cli_args
           test_api_error_handling
+          test_agent_secrets
+          test_agent_logging

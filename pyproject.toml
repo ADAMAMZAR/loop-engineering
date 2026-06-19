@@ -27,4 +27,6 @@ py-modules = [
     "ralph_loop",
     "real_repo_loop",
     "audit_replay",
+    "agent_secrets",
+    "agent_logging",
 ]

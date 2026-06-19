@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import shlex
+import logging
 import argparse
 import subprocess
 import datetime
@@ -9,7 +10,12 @@ from dotenv import load_dotenv
 import openai
 from openai import OpenAI
 
+from agent_secrets import has_api_key, resolve_api_key
+from agent_logging import configure_logging
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # --- DeepSeek (commented out) ---
 # client = OpenAI(
@@ -21,13 +27,9 @@ load_dotenv()
 # --- Google AI Studio (Gemini), via its OpenAI-compatible endpoint ---
 client = OpenAI(
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    api_key=os.environ.get("GOOGLE_API_KEY")
+    api_key=resolve_api_key()
 )
 MODEL = "gemini-2.5-flash"
-
-
-def has_api_key():
-    return bool(os.environ.get("GOOGLE_API_KEY"))
 
 
 WORKDIR = os.path.abspath(os.path.dirname(__file__))
@@ -228,12 +230,12 @@ def execute_tool_call(tool_call):
     else:
         log_event({"tool": name, "args": args, "decision": "auto"})
 
-    print(f"\n--- executing tool: {name}({args}) ---")
+    logger.info("executing tool: %s(%s)", name, args)
     try:
         result = TOOL_FUNCTIONS[name](**args)
     except Exception as e:
         result = f"Error: {e}"
-    print(f"--- result: {result} ---")
+    logger.info("result: %s", result)
     return str(result)
 
 
@@ -267,10 +269,13 @@ def call_model(messages):
 
 
 def main():
+    configure_logging()
+
     if not has_api_key():
-        print(
-            "Error: GOOGLE_API_KEY is not set. Add it to a .env file in the "
-            "project root, or export it in your shell, before running this script."
+        logger.error(
+            "GOOGLE_API_KEY is not set. Add it to a .env file in the project "
+            "root, set GOOGLE_API_KEY_FILE to point at a file containing it, "
+            "or export it in your shell, before running this script."
         )
         sys.exit(1)
 
@@ -281,13 +286,12 @@ def main():
     for iteration in range(1, MAX_ITERATIONS + 1):
         response, error = call_model(messages)
         if error:
-            print(f"\n--- stopping: API call failed: {error} ---")
+            logger.error("stopping: API call failed: %s", error)
             break
         tokens_used = record_usage(response, tokens_used)
         if tokens_used > MAX_TOKENS_PER_RUN:
-            print(
-                f"\n--- stopping: token budget exceeded "
-                f"({tokens_used}/{MAX_TOKENS_PER_RUN}) ---"
+            logger.warning(
+                "stopping: token budget exceeded (%d/%d)", tokens_used, MAX_TOKENS_PER_RUN
             )
             break
 
@@ -298,7 +302,7 @@ def main():
             print(f"\n--- assistant says ---\n{message.content}")
 
         if not message.tool_calls:
-            print("\n--- done: model stopped requesting tools ---")
+            logger.info("done: model stopped requesting tools")
             break
 
         for tool_call in message.tool_calls:
@@ -311,7 +315,7 @@ def main():
                 }
             )
     else:
-        print(f"\n--- stopping: hit the {MAX_ITERATIONS}-iteration cap ---")
+        logger.warning("stopping: hit the %d-iteration cap", MAX_ITERATIONS)
 
 
 if __name__ == "__main__":

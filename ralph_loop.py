@@ -3,6 +3,7 @@ import re
 import sys
 import json
 import shlex
+import logging
 import argparse
 import subprocess
 import datetime
@@ -10,7 +11,12 @@ from dotenv import load_dotenv
 import openai
 from openai import OpenAI
 
+from agent_secrets import has_api_key, resolve_api_key
+from agent_logging import configure_logging
+
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # --- DeepSeek (commented out) ---
 # client = OpenAI(
@@ -22,13 +28,9 @@ load_dotenv()
 # --- Google AI Studio (Gemini), via its OpenAI-compatible endpoint ---
 client = OpenAI(
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    api_key=os.environ.get("GOOGLE_API_KEY")
+    api_key=resolve_api_key()
 )
 MODEL = "gemini-2.5-flash"
-
-
-def has_api_key():
-    return bool(os.environ.get("GOOGLE_API_KEY"))
 
 
 WORKDIR = os.path.abspath(os.path.dirname(__file__))
@@ -175,13 +177,13 @@ def log_event(event):
 def execute_tool_call(tool_call):
     name = tool_call.function.name
     args = json.loads(tool_call.function.arguments)
-    print(f"\n--- executing tool: {name}({args}) ---")
+    logger.info("executing tool: %s(%s)", name, args)
     try:
         result = TOOL_FUNCTIONS[name](**args)
     except Exception as e:
         result = f"Error: {e}"
     log_event({"tool": name, "args": args, "result": str(result)[:500]})
-    print(f"--- result: {result} ---")
+    logger.info("result: %s", result)
     return str(result)
 
 
@@ -280,7 +282,7 @@ def run_task(task_text, retry_context=None):
         response, error = call_model(messages)
         if error:
             reason = f"API call failed: {error}"
-            print(f"\n=== API ERROR ===\n{reason}")
+            logger.error(reason)
             return "api_error", reason
 
         if record_usage(response):
@@ -288,7 +290,7 @@ def run_task(task_text, retry_context=None):
                 f"Run-wide token budget exceeded ({total_tokens_used}/"
                 f"{MAX_TOKENS_PER_RUN} tokens used). Stopping before any more API calls."
             )
-            print(f"\n=== TOKEN BUDGET EXCEEDED ===\n{reason}")
+            logger.error(reason)
             return "budget_exceeded", reason
 
         message = response.choices[0].message
@@ -320,11 +322,11 @@ def run_task(task_text, retry_context=None):
                     f"arguments and produced the same result {STUCK_REPEAT_THRESHOLD} "
                     f"times in a row. Last result:\n{result}"
                 )
-                print(f"\n=== NON-CONVERGENCE DETECTED ===\n{reason}")
+                logger.warning("non-convergence detected: %s", reason)
                 return "stuck", reason
 
     reason = f"Hit the {MAX_ITERATIONS_PER_TASK}-iteration cap without finishing this task."
-    print(f"\n=== NON-CONVERGENCE DETECTED ===\n{reason}")
+    logger.warning("non-convergence detected: %s", reason)
     return "max_iterations", reason
 
 
@@ -414,12 +416,11 @@ def handle_task_completion(task):
             }
         )
         if not passed:
-            print(f"\n=== VERIFICATION FAILED for task: {task['text']} ===")
-            print(output)
+            logger.error("verification failed for task: %s\n%s", task["text"], output)
             return False, output
-        print(f"=== Verification passed: {task['verify']} ===")
+        logger.info("verification passed: %s", task["verify"])
     else:
-        print("=== WARNING: task has no verify command; checking off on trust ===")
+        logger.warning("task has no verify command; checking off on trust")
 
     lines, tasks_now = load_tasks()
     fresh_task = next(t for t in tasks_now if t["line_index"] == task["line_index"])
@@ -443,9 +444,9 @@ def run_task_with_retries(task):
     """
     retry_context = None
     for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
-        print(
-            f"\n=== Fresh instance starting task (attempt {attempt}/"
-            f"{MAX_ATTEMPTS_PER_TASK}): {task['text']} ==="
+        logger.info(
+            "fresh instance starting task (attempt %d/%d): %s",
+            attempt, MAX_ATTEMPTS_PER_TASK, task["text"],
         )
         outcome, detail = run_task(task["text"], retry_context)
 
@@ -453,7 +454,7 @@ def run_task_with_retries(task):
             log_event(
                 {"task": task["text"], "non_convergence": outcome, "detail": str(detail)[:1000]}
             )
-            print(f"=== Stopping entire run, not just this task: {detail} ===")
+            logger.error("stopping entire run, not just this task: %s", detail)
             return False
 
         if outcome != "completed":
@@ -462,25 +463,26 @@ def run_task_with_retries(task):
             )
             if attempt < MAX_ATTEMPTS_PER_TASK:
                 retry_context = detail
-                print("=== Retrying with a fresh instance, given the failure above ===")
+                logger.info("retrying with a fresh instance, given the failure above")
                 continue
-            print(
-                f"=== Giving up on task after {MAX_ATTEMPTS_PER_TASK} attempts "
-                f"(last failure: {outcome}): {task['text']} — stopping run for human review ==="
+            logger.error(
+                "giving up on task after %d attempts (last failure: %s): %s — "
+                "stopping run for human review",
+                MAX_ATTEMPTS_PER_TASK, outcome, task["text"],
             )
             return False
 
         success, output = handle_task_completion(task)
         if success:
-            print(f"=== Checked off and committed: {task['text']} ===")
+            logger.info("checked off and committed: %s", task["text"])
             return True
         if attempt < MAX_ATTEMPTS_PER_TASK:
             retry_context = output or "Previous attempt did not finish successfully."
-            print("=== Retrying with a fresh instance, given the failure above ===")
+            logger.info("retrying with a fresh instance, given the failure above")
 
-    print(
-        f"=== Giving up on task after {MAX_ATTEMPTS_PER_TASK} attempts: "
-        f"{task['text']} — stopping run for human review ==="
+    logger.error(
+        "giving up on task after %d attempts: %s — stopping run for human review",
+        MAX_ATTEMPTS_PER_TASK, task["text"],
     )
     return False
 
@@ -496,12 +498,11 @@ def warn_about_missing_verify(tasks):
     """
     missing = [t for t in tasks if not t["done"] and not t["verify"]]
     if missing:
-        print(
-            "\n=== WARNING: these pending tasks have no verify command and "
-            "will be checked off on trust if reached: ==="
+        logger.warning(
+            "these pending tasks have no verify command and will be checked "
+            "off on trust if reached: %s",
+            ", ".join(t["text"] for t in missing),
         )
-        for t in missing:
-            print(f"  - {t['text']}")
 
 
 def build_arg_parser():
@@ -521,10 +522,13 @@ def build_arg_parser():
 
 def main():
     global SPEC_PATH
+    configure_logging()
+
     if not has_api_key():
-        print(
-            "Error: GOOGLE_API_KEY is not set. Add it to a .env file in the "
-            "project root, or export it in your shell, before running this script."
+        logger.error(
+            "GOOGLE_API_KEY is not set. Add it to a .env file in the project "
+            "root, set GOOGLE_API_KEY_FILE to point at a file containing it, "
+            "or export it in your shell, before running this script."
         )
         sys.exit(1)
 
@@ -538,7 +542,7 @@ def main():
         lines, tasks = load_tasks()
         pending = [t for t in tasks if not t["done"]]
         if not pending:
-            print("\nNo unchecked tasks remain in spec.md. Stopping.")
+            logger.info("no unchecked tasks remain in spec.md. Stopping.")
             break
 
         task = pending[0]

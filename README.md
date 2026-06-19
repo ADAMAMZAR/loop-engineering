@@ -26,6 +26,10 @@ last.
 | [`requirements.txt`](requirements.txt) | — | Pinned dependency versions. |
 | [`pyproject.toml`](pyproject.toml) | — | Makes the project pip-installable and registers the `agent-harness`/`agent-ralph`/`agent-real-repo`/`agent-audit` console commands. |
 | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | — | CI: runs the full test suite on every push/PR. |
+| [`agent_secrets.py`](agent_secrets.py) | — | Resolves the API key from `GOOGLE_API_KEY` or, failing that, a file named by `GOOGLE_API_KEY_FILE`. |
+| [`test_agent_secrets.py`](test_agent_secrets.py) | — | Unit tests for `agent_secrets.py`. |
+| [`agent_logging.py`](agent_logging.py) | — | Shared `logging` setup (level controlled by `LOG_LEVEL`) used by the three runnable scripts. |
+| [`test_agent_logging.py`](test_agent_logging.py) | — | Unit tests for `agent_logging.py`. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -66,10 +70,27 @@ treats it like a run-wide failure (not retried, since the next call would
 likely fail the same way) and `safe_harness.py`/`real_repo_loop.py` stop the
 loop cleanly. Covered by `test_api_error_handling.py`.
 
+If you'd rather not put the key in a plain `.env` file — e.g. you're running
+in Docker or Kubernetes and prefer the "secret as a mounted file" pattern
+those platforms favor over env vars — set `GOOGLE_API_KEY_FILE` to a file
+path instead, and `agent_secrets.py` reads the key from there. `GOOGLE_API_KEY`
+takes priority if both are set. Covered by `test_agent_secrets.py`.
+
+## Logging
+
+All three runnable scripts (`safe_harness.py`, `ralph_loop.py`,
+`real_repo_loop.py`) log their status — tool execution, verification
+results, retries, non-convergence, errors — through Python's `logging`
+module instead of bare `print()`, configured by `agent_logging.py`. Logs go
+to stderr with a timestamp and level, so stdout stays free for the model's
+own output and any interactive approval prompts. Set `LOG_LEVEL` (e.g.
+`LOG_LEVEL=DEBUG`) to control verbosity; it defaults to `INFO`. Covered by
+`test_agent_logging.py`.
+
 ## Tests
 
 ```bash
-python -m unittest test_ralph_verification test_run_shell_sandbox test_audit_replay test_cli_args test_api_error_handling
+python -m unittest test_ralph_verification test_run_shell_sandbox test_audit_replay test_cli_args test_api_error_handling test_agent_secrets test_agent_logging
 ```
 
 None of these tests make a real API call or need `GOOGLE_API_KEY` set — every
