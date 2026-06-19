@@ -9,8 +9,11 @@ GitHub repo. Each phase is a runnable script that builds on the last.
 ```bash
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install openai
-export DEEPSEEK_API_KEY=your_key_here    # Windows: set DEEPSEEK_API_KEY=...
+pip install openai python-dotenv
+# Create a .env file with:
+# GOOGLE_API_KEY=your_key_here   (from aistudio.google.com)
+# DeepSeek is supported too (see the commented-out client block in each
+# script) — set DEEPSEEK_API_KEY instead if you switch back.
 ```
 
 ## Roadmap
@@ -18,18 +21,21 @@ export DEEPSEEK_API_KEY=your_key_here    # Windows: set DEEPSEEK_API_KEY=...
 - [x] **Phase 0 — One agent call** (`phase0_single_call.py`)
   See the raw tool-use request/response. No loop yet — just the seam.
 
-- [ ] **Phase 1 — The basic agentic loop**
+- [x] **Phase 1 — The basic agentic loop** (`phase1_loop.py`)
   Wire the call into a loop: send → tool_use → you execute it → feed the
-  result back → repeat until Claude stops asking for tools. Tools: `read_file`,
+  result back → repeat until the model stops asking for tools. Tools: `read_file`,
   `write_file`, `list_dir`, `run_shell`. This is the ReAct pattern every coding
   agent runs underneath.
 
-- [ ] **Phase 2 — Harness: make it safe**
-  Wrap the loop from Phase 1 with:
+- [x] **Phase 2 — Harness: make it safe** (`phase2_harness.py`)
+  Wraps the loop from Phase 1 with:
   - a permission system (read-only tools auto-run, mutating tools need your
     approval first)
-  - a sandbox (the shell/file tools are restricted to one working directory)
-  - an audit log (every tool call and decision written to disk, replayable)
+  - a sandbox (file tools are restricted to the project directory; `run_shell`
+    runs with `cwd` pinned there, though the approval gate is the real
+    safety net for that tool)
+  - an audit log (every tool call and decision written to `phase2_audit.log`,
+    one JSON line each, replayable)
 
 - [ ] **Phase 3 — Loop engineering: make it autonomous**
   Ralph pattern: the agent reads a `spec.md` of tasks, picks one unchecked

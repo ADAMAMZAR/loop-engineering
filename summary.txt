@@ -1,1 +1,0 @@
-This file is a test for the agent-from-scratch project, confirming tool-use functionality and providing a networking fun fact about subnetting.
