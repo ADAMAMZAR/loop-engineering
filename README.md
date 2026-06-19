@@ -12,6 +12,8 @@ last.
 | [`single_tool_call.py`](single_tool_call.py) | 0 | One raw tool-use request/response — no loop. |
 | [`agent_loop.py`](agent_loop.py) | 1 | Wires the call into a ReAct loop with four tools. |
 | [`safe_harness.py`](safe_harness.py) | 2 | Adds approval gating, a path sandbox, and an audit log. |
+| [`ralph_loop.py`](ralph_loop.py) | 3 | Autonomously works through `spec.md`, one fresh instance per task. |
+| [`spec.md`](spec.md) | 3 | Task checklist `ralph_loop.py` reads from and checks off. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -54,11 +56,14 @@ providers.
   - an audit log (every tool call and decision written to `audit_log.jsonl`,
     one JSON line each, replayable)
 
-- [ ] **Phase 3 — Loop engineering: make it autonomous**
-  Ralph pattern: the agent reads a `spec.md` of tasks, picks one unchecked
-  item, implements it, runs tests, checks it off, commits — then a *fresh*
-  instance with a clean context starts the next one. Teaches stateless,
-  externally-persisted loop design and stopping conditions.
+- [x] **Phase 3 — Loop engineering: make it autonomous** (`ralph_loop.py`)
+  Ralph pattern: the agent reads `spec.md`, picks the first unchecked
+  item, implements it with a fresh, memory-free conversation, verifies its
+  own work, checks the item off, and commits — then the next task gets its
+  own fresh instance with zero memory of the last one. State lives in
+  `spec.md` and the git log, not in any conversation. No approval gate
+  here (that's the point of "autonomous"); capped at 5 tasks per run as a
+  safety stop.
 
 - [ ] **Phase 4 — Point it at something real**
   Run it against a real repo with a narrow goal and the Phase 2 approval
