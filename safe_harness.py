@@ -1,6 +1,7 @@
 import os
 import json
 import shlex
+import argparse
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -208,16 +209,32 @@ def record_usage(response, tokens_used):
     return tokens_used + tokens
 
 
+DEFAULT_GOAL = (
+    "List the files in the current directory, read sample.txt, "
+    "then write a one-sentence summary of it to summary.txt."
+)
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run a permission-gated, sandboxed coding agent against this "
+            "project directory. Mutating tool calls (write_file, run_shell) "
+            "stop and ask for your approval before running."
+        )
+    )
+    parser.add_argument(
+        "goal",
+        nargs="?",
+        default=DEFAULT_GOAL,
+        help="What you want the agent to do. Defaults to a demo task if omitted.",
+    )
+    return parser
+
+
 def main():
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                "List the files in the current directory, read sample.txt, "
-                "then write a one-sentence summary of it to summary.txt."
-            ),
-        }
-    ]
+    args = build_arg_parser().parse_args()
+    messages = [{"role": "user", "content": args.goal}]
 
     tokens_used = 0
     for iteration in range(1, MAX_ITERATIONS + 1):

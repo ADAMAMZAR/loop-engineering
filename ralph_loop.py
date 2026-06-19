@@ -2,6 +2,7 @@ import os
 import re
 import json
 import shlex
+import argparse
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -476,7 +477,26 @@ def warn_about_missing_verify(tasks):
             print(f"  - {t['text']}")
 
 
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Autonomously work through a spec.md-style task checklist, one "
+            "fresh, memory-free agent instance per task."
+        )
+    )
+    parser.add_argument(
+        "--spec",
+        default=SPEC_PATH,
+        help="Path to the task checklist file to work through. Defaults to spec.md in this project.",
+    )
+    return parser
+
+
 def main():
+    global SPEC_PATH
+    args = build_arg_parser().parse_args()
+    SPEC_PATH = os.path.abspath(args.spec)
+
     _, all_tasks = load_tasks()
     warn_about_missing_verify(all_tasks)
 

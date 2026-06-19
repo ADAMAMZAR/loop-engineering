@@ -19,6 +19,7 @@ last.
 | [`audit_replay.py`](audit_replay.py) | 2 | Query/pretty-print any audit log JSONL file (`python audit_replay.py audit_log.jsonl --tool write_file`). |
 | [`test_audit_replay.py`](test_audit_replay.py) | 2 | Unit tests for `audit_replay.py`'s filtering and formatting. |
 | [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
+| [`test_cli_args.py`](test_cli_args.py) | — | Unit tests for each script's CLI argument parsing. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -66,12 +67,16 @@ providers.
     iterations and `MAX_TOKENS_PER_RUN` tokens, so a model that keeps
     requesting tools forever can't loop — or spend — without limit, even
     if every individual tool call gets approved.
-  - an audit log that's actually queryable: `audit_replay.py` reads any of
-    this project's JSONL audit logs and filters by tool, decision, task
-    text, or timestamp range, instead of the log existing only to be read
-    by eye. Covered by `test_audit_replay.py`.
-  - an audit log (every tool call and decision written to `audit_log.jsonl`,
-    one JSON line each, replayable)
+  - an audit log that's actually queryable: every tool call and decision
+    is written to `audit_log.jsonl`, one JSON line each, and
+    `audit_replay.py` reads any of this project's JSONL audit logs and
+    filters by tool, decision, task text, or timestamp range, instead of
+    the log existing only to be read by eye. Covered by
+    `test_audit_replay.py`.
+
+  Run it with `python safe_harness.py "your goal here"` — the goal is a
+  CLI argument, not something you edit into the script. Omit it to run
+  the built-in demo task.
 
 - [x] **Phase 3 — Loop engineering: make it autonomous** (`ralph_loop.py`)
   Ralph pattern: the agent reads `spec.md`, picks the first unchecked
@@ -112,6 +117,10 @@ providers.
   visible before the run begins rather than discovered task-by-task once
   it's already underway. Covered by `test_ralph_verification.py`.
 
+  Run it with `python ralph_loop.py`, or point it at a different task
+  file with `python ralph_loop.py --spec other_tasks.md` — no code
+  editing needed to change which checklist it works through.
+
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
   A single narrow goal (add a LICENSE file) run against this actual repo,
   with the Phase 2 mutating-tool approval gate active, plus a second,
@@ -119,6 +128,9 @@ providers.
   diff (`git diff --stat origin/main..HEAD`) and requires typing the exact
   word `PUSH` to confirm — generic `y` isn't enough for the one action
   that's hard to take back.
+
+  Run it with `python real_repo_loop.py "your goal here"`. Omit the goal
+  to run the built-in MIT-license demo goal.
 
 ## Phase 0 — what to look for when you run it
 

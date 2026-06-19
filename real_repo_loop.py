@@ -1,6 +1,7 @@
 import os
 import json
 import shlex
+import argparse
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -28,7 +29,7 @@ AUDIT_LOG_PATH = os.path.join(WORKDIR, "real_repo_audit.jsonl")
 READ_ONLY_TOOLS = {"read_file", "list_dir"}
 MUTATING_TOOLS = {"write_file", "run_shell"}
 
-GOAL = (
+DEFAULT_GOAL = (
     "Add an MIT LICENSE file to the root of this repository. "
     "Copyright holder: Adam Amzar. Copyright year: use the current year. "
     "Steps, each as its own separate run_shell call so they can be reviewed "
@@ -36,6 +37,22 @@ GOAL = (
     "(3) `git commit -m \"Add MIT license\"`, (4) `git push`. "
     "Do not combine these into one shell command."
 )
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run an approval-gated agent against this real repo, with a "
+            "stricter confirmation gate before any git push."
+        )
+    )
+    parser.add_argument(
+        "goal",
+        nargs="?",
+        default=DEFAULT_GOAL,
+        help="What you want the agent to do. Defaults to the MIT-license demo goal if omitted.",
+    )
+    return parser
 
 tools = [
     {
@@ -227,7 +244,8 @@ def record_usage(response, tokens_used):
 
 
 def main():
-    messages = [{"role": "user", "content": GOAL}]
+    args = build_arg_parser().parse_args()
+    messages = [{"role": "user", "content": args.goal}]
 
     tokens_used = 0
     for iteration in range(1, MAX_ITERATIONS + 1):
