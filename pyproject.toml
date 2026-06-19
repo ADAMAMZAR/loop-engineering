@@ -29,4 +29,5 @@ py-modules = [
     "audit_replay",
     "agent_secrets",
     "agent_logging",
+    "agent_shell",
 ]

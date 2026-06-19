@@ -30,6 +30,8 @@ last.
 | [`test_agent_secrets.py`](test_agent_secrets.py) | — | Unit tests for `agent_secrets.py`. |
 | [`agent_logging.py`](agent_logging.py) | — | Shared `logging` setup (level controlled by `LOG_LEVEL`) used by the three runnable scripts. |
 | [`test_agent_logging.py`](test_agent_logging.py) | — | Unit tests for `agent_logging.py`. |
+| [`agent_shell.py`](agent_shell.py) | 2 | Shared `run_shell`: binary allowlist plus a git/pip subcommand allowlist, used by all three runnable scripts. |
+| [`test_agent_shell.py`](test_agent_shell.py) | 2 | Unit tests for the subcommand allowlist, including the per-script git push policy. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -59,7 +61,11 @@ GOOGLE_API_KEY=your_key_here
 Get a key from [aistudio.google.com](https://aistudio.google.com). DeepSeek
 is supported too — each script has a commented-out DeepSeek client block;
 uncomment it and set `DEEPSEEK_API_KEY` instead if you want to switch
-providers.
+providers. This has actually been tested against the real API, not just
+assumed: a live request with that `base_url`/model combination authenticated
+and reached the model correctly, failing only on account balance (HTTP 402),
+not on auth or an unrecognized model — so the integration itself is
+confirmed correct, even though a full successful response wasn't observed.
 
 If `GOOGLE_API_KEY` isn't set, every script checks for it before making any
 API call and exits with a clear error message instead of failing deep inside
@@ -87,10 +93,39 @@ own output and any interactive approval prompts. Set `LOG_LEVEL` (e.g.
 `LOG_LEVEL=DEBUG`) to control verbosity; it defaults to `INFO`. Covered by
 `test_agent_logging.py`.
 
+## The run_shell allowlist
+
+`agent_shell.py` is the shared `run_shell` implementation for all three
+runnable scripts. Beyond restricting which binaries can run at all (`git`,
+`python`, `pip`, `pytest`), it also restricts *which subcommands* of `git`
+and `pip` are allowed — being an allowed binary doesn't mean every
+subcommand it exposes is safe to let an agent run unreviewed:
+
+- `git` is restricted to `status`, `diff`, `log`, `show`, `add`, `commit` by
+  default. Notably excluded: `push`, `config`, `remote`, `clone`, `fetch`,
+  `pull`, `checkout`, `reset`. `real_repo_loop.py` is the one exception —
+  it adds `push` back, since that script's whole job is `git add` / `commit`
+  / `push` and the push is already gated separately by
+  `request_push_approval`. `safe_harness.py` and, especially, `ralph_loop.py`
+  (which has no approval gate at all) never get `push`.
+- `pip` is restricted to `list`, `show`, `freeze`, `check` everywhere —
+  `install`/`uninstall`/`download` are blocked on all three scripts, since
+  an agent installing arbitrary packages on its own is a supply-chain risk
+  regardless of which script is running it. Dependencies belong in
+  `requirements.txt`, reviewed by a human.
+
+This is **not** a full sandbox. `python -c "<anything>"` is a complete
+scripting environment, and no allowlist over argv can constrain what code
+it runs — that would need real OS-level isolation (a container, VM, or
+seccomp profile), which is out of scope for this project. What this
+allowlist narrows is the *shell command* surface, not arbitrary code run by
+an interpreter that's itself allowed to execute. Covered by
+`test_agent_shell.py`.
+
 ## Tests
 
 ```bash
-python -m unittest test_ralph_verification test_run_shell_sandbox test_audit_replay test_cli_args test_api_error_handling test_agent_secrets test_agent_logging
+python -m unittest test_ralph_verification test_run_shell_sandbox test_audit_replay test_cli_args test_api_error_handling test_agent_secrets test_agent_logging test_agent_shell
 ```
 
 None of these tests make a real API call or need `GOOGLE_API_KEY` set — every
@@ -115,12 +150,17 @@ before it gets caught by you running the script live.
   - a permission system (read-only tools auto-run, mutating tools need your
     approval first)
   - a sandbox: file tools are restricted to the project directory, and
-    `run_shell` parses its command into argv and runs it with `shell=False`
-    against a fixed binary allowlist (`git`, `python`, `pip`, `pytest`) —
-    with no real shell present, `&&`, `;`, `|`, backticks, and redirection
-    have nothing to interpret them, so they end up as inert literal
-    arguments instead of chained commands. Covered by
-    `test_run_shell_sandbox.py`.
+    `run_shell` (shared across all three runnable scripts via
+    `agent_shell.py`) parses its command into argv and runs it with
+    `shell=False` against a fixed binary allowlist (`git`, `python`, `pip`,
+    `pytest`) — with no real shell present, `&&`, `;`, `|`, backticks, and
+    redirection have nothing to interpret them, so they end up as inert
+    literal arguments instead of chained commands. On top of that, `git`
+    and `pip` each get a subcommand-level allowlist too (see
+    [The run_shell allowlist](#the-run_shell-allowlist) below), since being
+    an allowed binary doesn't mean every subcommand it exposes is safe to
+    run unreviewed. Covered by `test_run_shell_sandbox.py` and
+    `test_agent_shell.py`.
   - a blast-radius cap: the main loop is bounded at `MAX_ITERATIONS`
     iterations and `MAX_TOKENS_PER_RUN` tokens, so a model that keeps
     requesting tools forever can't loop — or spend — without limit, even

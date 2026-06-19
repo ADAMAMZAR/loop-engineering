@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import json
-import shlex
 import logging
 import argparse
 import subprocess
@@ -11,6 +10,7 @@ from dotenv import load_dotenv
 import openai
 from openai import OpenAI
 
+import agent_shell
 from agent_secrets import has_api_key, resolve_api_key
 from agent_logging import configure_logging
 
@@ -19,6 +19,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # --- DeepSeek (commented out) ---
+# Verified against the real API: this base_url/model combination is
+# authenticated and recognized correctly (a live request reached the model
+# and failed only on account balance - HTTP 402 - not on auth or an unknown
+# model error). Swap api_key= to agent_secrets.resolve_api_key() too if you
+# want the GOOGLE_API_KEY_FILE fallback for this key as well.
 # client = OpenAI(
 #     base_url="https://api.deepseek.com",
 #     api_key=os.environ.get("DEEPSEEK_API_KEY")
@@ -128,36 +133,16 @@ def list_dir(path="."):
     return "\n".join(os.listdir(resolve_in_sandbox(path)))
 
 
-# The fixed set of binaries the agent's run_shell tool may invoke. This is
-# the tool the autonomous agent calls itself; run_verification below is a
-# separate, harness-controlled path and is intentionally not restricted
-# the same way, since the harness writes that command, not the agent.
-ALLOWED_SHELL_COMMANDS = {"git", "python", "pip", "pytest"}
-
-
+# run_verification below is a separate, harness-controlled path and is
+# intentionally not restricted the same way agent_shell.run_shell is, since
+# the harness writes that command, not the agent.
+#
+# No approval gate exists for this script (full autonomy is the point of
+# the Ralph pattern), so this gets the default git subcommand allowlist
+# with no "push" — nothing reviews this agent's shell calls before they
+# run, so it shouldn't be able to push to a remote on its own.
 def run_shell(command):
-    """Parse into argv and execute directly (shell=False), restricted to
-    ALLOWED_SHELL_COMMANDS — see safe_harness.py's run_shell for why this
-    replaces a plain shell=True call.
-    """
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        return f"Error: could not parse command: {e}"
-    if not args:
-        return "Error: empty command."
-
-    binary = os.path.basename(args[0]).lower()
-    if binary.endswith(".exe"):
-        binary = binary[:-4]
-    if binary not in ALLOWED_SHELL_COMMANDS:
-        return (
-            f"Error: '{binary}' is not in the allowed command list "
-            f"{sorted(ALLOWED_SHELL_COMMANDS)}. Rejected before execution."
-        )
-
-    result = subprocess.run(args, shell=False, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
-    return f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return agent_shell.run_shell(command, WORKDIR)
 
 
 TOOL_FUNCTIONS = {

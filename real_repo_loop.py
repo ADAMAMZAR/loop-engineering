@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import shlex
 import logging
 import argparse
 import subprocess
@@ -10,6 +9,7 @@ from dotenv import load_dotenv
 import openai
 from openai import OpenAI
 
+import agent_shell
 from agent_secrets import has_api_key, resolve_api_key
 from agent_logging import configure_logging
 
@@ -18,6 +18,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # --- DeepSeek (commented out) ---
+# Verified against the real API: this base_url/model combination is
+# authenticated and recognized correctly (a live request reached the model
+# and failed only on account balance - HTTP 402 - not on auth or an unknown
+# model error). Swap api_key= to agent_secrets.resolve_api_key() too if you
+# want the GOOGLE_API_KEY_FILE fallback for this key as well.
 # client = OpenAI(
 #     base_url="https://api.deepseek.com",
 #     api_key=os.environ.get("DEEPSEEK_API_KEY")
@@ -149,29 +154,16 @@ def list_dir(path="."):
 # This is the highest-stakes script in the repo (it can push to the real,
 # public remote), so it gets the same allowlisted, shell=False run_shell as
 # safe_harness.py and ralph_loop.py, on top of the push-specific approval
-# gate in execute_tool_call below.
-ALLOWED_SHELL_COMMANDS = {"git", "python", "pip", "pytest"}
+# gate in execute_tool_call below. Unlike the other two scripts, "push" is
+# added to the allowed git subcommands here, since this script's whole job
+# is git add/commit/push and that gate already exists separately.
+ALLOWED_GIT_SUBCOMMANDS = agent_shell.DEFAULT_ALLOWED_GIT_SUBCOMMANDS | {"push"}
 
 
 def run_shell(command):
-    try:
-        args = shlex.split(command)
-    except ValueError as e:
-        return f"Error: could not parse command: {e}"
-    if not args:
-        return "Error: empty command."
-
-    binary = os.path.basename(args[0]).lower()
-    if binary.endswith(".exe"):
-        binary = binary[:-4]
-    if binary not in ALLOWED_SHELL_COMMANDS:
-        return (
-            f"Error: '{binary}' is not in the allowed command list "
-            f"{sorted(ALLOWED_SHELL_COMMANDS)}. Rejected before execution."
-        )
-
-    result = subprocess.run(args, shell=False, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
-    return f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return agent_shell.run_shell(
+        command, WORKDIR, allowed_git_subcommands=ALLOWED_GIT_SUBCOMMANDS
+    )
 
 
 TOOL_FUNCTIONS = {
