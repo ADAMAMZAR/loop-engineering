@@ -5,4 +5,5 @@ __pycache__/
 summary.txt
 audit_log.jsonl
 ralph_audit.jsonl
+real_repo_audit.jsonl
 .claude/
