@@ -14,6 +14,7 @@ last.
 | [`safe_harness.py`](safe_harness.py) | 2 | Adds approval gating, a path sandbox, and an audit log. |
 | [`ralph_loop.py`](ralph_loop.py) | 3 | Autonomously works through `spec.md`, one fresh instance per task. |
 | [`spec.md`](spec.md) | 3 | Task checklist `ralph_loop.py` reads from and checks off. |
+| [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -65,9 +66,13 @@ providers.
   here (that's the point of "autonomous"); capped at 5 tasks per run as a
   safety stop.
 
-- [ ] **Phase 4 — Point it at something real**
-  Run it against a real repo with a narrow goal and the Phase 2 approval
-  gate active before anything gets pushed.
+- [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
+  A single narrow goal (add a LICENSE file) run against this actual repo,
+  with the Phase 2 mutating-tool approval gate active, plus a second,
+  stricter gate specifically for `git push`: it shows the real outgoing
+  diff (`git diff --stat origin/main..HEAD`) and requires typing the exact
+  word `PUSH` to confirm — generic `y` isn't enough for the one action
+  that's hard to take back.
 
 ## Phase 0 — what to look for when you run it
 
