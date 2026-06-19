@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 summary.txt
 audit_log.jsonl
+ralph_audit.jsonl
+.claude/
