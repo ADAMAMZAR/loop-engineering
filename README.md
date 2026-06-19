@@ -11,9 +11,11 @@ last.
 |---|---|---|
 | [`single_tool_call.py`](single_tool_call.py) | 0 | One raw tool-use request/response — no loop. |
 | [`agent_loop.py`](agent_loop.py) | 1 | Wires the call into a ReAct loop with four tools. |
-| [`safe_harness.py`](safe_harness.py) | 2 | Adds approval gating, a path sandbox, and an audit log. |
+| [`safe_harness.py`](safe_harness.py) | 2 | Adds approval gating, a path sandbox, a `run_shell` command allowlist, and an audit log. |
 | [`ralph_loop.py`](ralph_loop.py) | 3 | Autonomously works through `spec.md`, one fresh instance per task. |
 | [`spec.md`](spec.md) | 3 | Task checklist `ralph_loop.py` reads from and checks off. |
+| [`test_ralph_verification.py`](test_ralph_verification.py) | 3 | Unit tests for the verification gate and retry logic. |
+| [`test_run_shell_sandbox.py`](test_run_shell_sandbox.py) | 2 | Unit tests for the `run_shell` allowlist/sandbox. |
 | [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
@@ -51,20 +53,36 @@ providers.
   Wraps the loop from Phase 1 with:
   - a permission system (read-only tools auto-run, mutating tools need your
     approval first)
-  - a sandbox (file tools are restricted to the project directory;
-    `run_shell` runs with `cwd` pinned there, though the approval gate is
-    the real safety net for that tool)
+  - a sandbox: file tools are restricted to the project directory, and
+    `run_shell` parses its command into argv and runs it with `shell=False`
+    against a fixed binary allowlist (`git`, `python`, `pip`, `pytest`) —
+    with no real shell present, `&&`, `;`, `|`, backticks, and redirection
+    have nothing to interpret them, so they end up as inert literal
+    arguments instead of chained commands. Covered by
+    `test_run_shell_sandbox.py`.
   - an audit log (every tool call and decision written to `audit_log.jsonl`,
     one JSON line each, replayable)
 
 - [x] **Phase 3 — Loop engineering: make it autonomous** (`ralph_loop.py`)
   Ralph pattern: the agent reads `spec.md`, picks the first unchecked
-  item, implements it with a fresh, memory-free conversation, verifies its
-  own work, checks the item off, and commits — then the next task gets its
-  own fresh instance with zero memory of the last one. State lives in
-  `spec.md` and the git log, not in any conversation. No approval gate
-  here (that's the point of "autonomous"); capped at 5 tasks per run as a
-  safety stop.
+  item, implements it with a fresh, memory-free conversation, and checks
+  the item off and commits — then the next task gets its own fresh
+  instance with zero memory of the last one. State lives in `spec.md` and
+  the git log, not in any conversation. No approval gate here (that's the
+  point of "autonomous"); capped at 5 tasks per run as a safety stop.
+
+  Tasks can carry a `- verify: \`command\`` line. After the agent finishes,
+  the harness itself — not the agent — runs that command and only checks
+  the box and commits if it exits 0. This replaced trusting the model's
+  own "I tested it, it works" claim, after a live Phase 4 run proved that
+  claim can be wrong (see Phase 4 below).
+
+  If verification fails, the task gets exactly one retry: a brand-new
+  fresh instance (still memory-free of other tasks) is told what the
+  verification command reported and asked to fix it. If that second
+  attempt also fails, the run stops there for a human to look at, rather
+  than auto-retrying forever on a broken task. Covered by
+  `test_ralph_verification.py`.
 
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
   A single narrow goal (add a LICENSE file) run against this actual repo,

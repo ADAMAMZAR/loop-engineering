@@ -1,5 +1,6 @@
 import os
 import json
+import shlex
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -114,11 +115,38 @@ def list_dir(path="."):
     return "\n".join(os.listdir(resolve_in_sandbox(path)))
 
 
+# The fixed set of binaries run_shell is allowed to invoke at all. Anything
+# else is rejected before a single process gets spawned.
+ALLOWED_SHELL_COMMANDS = {"git", "python", "pip", "pytest"}
+
+
 def run_shell(command):
-    # cwd confines relative paths and relative commands to WORKDIR, but a
-    # command can still reference absolute paths elsewhere on disk — the
-    # approval gate below is the real safety net for this tool, not the cwd.
-    result = subprocess.run(command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
+    """Parse the command into argv and execute it directly (shell=False),
+    restricted to ALLOWED_SHELL_COMMANDS.
+
+    cwd pinning alone doesn't stop a command from referencing absolute
+    paths or chaining further commands with &&/;/| — those only work
+    because a real shell is there to interpret them. With shell=False and
+    no shell process involved, those characters become inert literal
+    argv entries to the binary itself, not a chain of separate commands.
+    """
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return f"Error: could not parse command: {e}"
+    if not args:
+        return "Error: empty command."
+
+    binary = os.path.basename(args[0]).lower()
+    if binary.endswith(".exe"):
+        binary = binary[:-4]
+    if binary not in ALLOWED_SHELL_COMMANDS:
+        return (
+            f"Error: '{binary}' is not in the allowed command list "
+            f"{sorted(ALLOWED_SHELL_COMMANDS)}. Rejected before execution."
+        )
+
+    result = subprocess.run(args, shell=False, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
     return f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 

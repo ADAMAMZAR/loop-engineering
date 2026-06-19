@@ -1,5 +1,6 @@
 import os
 import json
+import shlex
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -119,8 +120,31 @@ def list_dir(path="."):
     return "\n".join(os.listdir(resolve_in_sandbox(path)))
 
 
+# This is the highest-stakes script in the repo (it can push to the real,
+# public remote), so it gets the same allowlisted, shell=False run_shell as
+# safe_harness.py and ralph_loop.py, on top of the push-specific approval
+# gate in execute_tool_call below.
+ALLOWED_SHELL_COMMANDS = {"git", "python", "pip", "pytest"}
+
+
 def run_shell(command):
-    result = subprocess.run(command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return f"Error: could not parse command: {e}"
+    if not args:
+        return "Error: empty command."
+
+    binary = os.path.basename(args[0]).lower()
+    if binary.endswith(".exe"):
+        binary = binary[:-4]
+    if binary not in ALLOWED_SHELL_COMMANDS:
+        return (
+            f"Error: '{binary}' is not in the allowed command list "
+            f"{sorted(ALLOWED_SHELL_COMMANDS)}. Rejected before execution."
+        )
+
+    result = subprocess.run(args, shell=False, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
     return f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 

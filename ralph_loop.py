@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import shlex
 import subprocess
 import datetime
 from dotenv import load_dotenv
@@ -117,8 +118,35 @@ def list_dir(path="."):
     return "\n".join(os.listdir(resolve_in_sandbox(path)))
 
 
+# The fixed set of binaries the agent's run_shell tool may invoke. This is
+# the tool the autonomous agent calls itself; run_verification below is a
+# separate, harness-controlled path and is intentionally not restricted
+# the same way, since the harness writes that command, not the agent.
+ALLOWED_SHELL_COMMANDS = {"git", "python", "pip", "pytest"}
+
+
 def run_shell(command):
-    result = subprocess.run(command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
+    """Parse into argv and execute directly (shell=False), restricted to
+    ALLOWED_SHELL_COMMANDS — see safe_harness.py's run_shell for why this
+    replaces a plain shell=True call.
+    """
+    try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return f"Error: could not parse command: {e}"
+    if not args:
+        return "Error: empty command."
+
+    binary = os.path.basename(args[0]).lower()
+    if binary.endswith(".exe"):
+        binary = binary[:-4]
+    if binary not in ALLOWED_SHELL_COMMANDS:
+        return (
+            f"Error: '{binary}' is not in the allowed command list "
+            f"{sorted(ALLOWED_SHELL_COMMANDS)}. Rejected before execution."
+        )
+
+    result = subprocess.run(args, shell=False, cwd=WORKDIR, capture_output=True, text=True, timeout=30)
     return f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
 
@@ -149,7 +177,7 @@ def execute_tool_call(tool_call):
     return str(result)
 
 
-def run_task(task_text):
+def run_task(task_text, retry_context=None):
     """One fresh, stateless agent instance implementing a single spec task.
 
     A brand-new `messages` list means this conversation has no memory of
@@ -157,18 +185,25 @@ def run_task(task_text):
     tasks are spec.md (which task is checked off) and the git log (what
     actually got committed). That's the externally-persisted state the
     Ralph pattern relies on instead of a long-lived conversation.
+
+    `retry_context`, when set, is the verification failure output from a
+    previous attempt at this same task. The new instance still starts with
+    zero memory of *other* tasks — it just gets told why the last attempt
+    at *this* task didn't pass, so a retry isn't a blind repeat.
     """
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Implement this task from spec.md: {task_text}\n\n"
-                "Use the available tools to read/write files and run shell "
-                "commands as needed. Verify your work by running it before "
-                "you finish."
-            ),
-        }
-    ]
+    prompt = (
+        f"Implement this task from spec.md: {task_text}\n\n"
+        "Use the available tools to read/write files and run shell "
+        "commands as needed. Verify your work by running it before "
+        "you finish."
+    )
+    if retry_context:
+        prompt += (
+            "\n\nA previous attempt at this exact task failed verification. "
+            f"Here is what the verification command reported:\n{retry_context}\n\n"
+            "Diagnose and fix the underlying issue, then try again."
+        )
+    messages = [{"role": "user", "content": prompt}]
     while True:
         response = client.chat.completions.create(
             model=MODEL,
@@ -197,17 +232,45 @@ def run_task(task_text):
 
 
 TASK_LINE_RE = re.compile(r"^- \[( |x)\] (.+)$")
+VERIFY_LINE_RE = re.compile(r"^\s*- verify: `(.+)`$")
+
+
+def parse_tasks(lines):
+    r"""Pure parsing logic, split out from file I/O so it's unit-testable.
+
+    A task may be followed by a `  - verify: \`command\`` line. That command
+    is run by the harness itself (not the agent) after the task finishes,
+    and is the actual gate for checking the box and committing — the
+    model's own claim that it "verified" its work is not trusted.
+    """
+    tasks = []
+    current = None
+    for i, line in enumerate(lines):
+        stripped = line.rstrip("\n")
+        match = TASK_LINE_RE.match(stripped)
+        if match:
+            if current is not None:
+                tasks.append(current)
+            current = {
+                "line_index": i,
+                "done": match.group(1) == "x",
+                "text": match.group(2),
+                "verify": None,
+            }
+            continue
+        if current is not None:
+            vmatch = VERIFY_LINE_RE.match(stripped)
+            if vmatch:
+                current["verify"] = vmatch.group(1)
+    if current is not None:
+        tasks.append(current)
+    return tasks
 
 
 def load_tasks():
     with open(SPEC_PATH, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    tasks = []
-    for i, line in enumerate(lines):
-        match = TASK_LINE_RE.match(line.rstrip("\n"))
-        if match:
-            tasks.append({"line_index": i, "done": match.group(1) == "x", "text": match.group(2)})
-    return lines, tasks
+    return lines, parse_tasks(lines)
 
 
 def mark_task_done(lines, line_index):
@@ -221,6 +284,88 @@ def commit_task(task_text):
     subprocess.run(["git", "commit", "-m", f"Ralph: {task_text}"], cwd=WORKDIR, check=True)
 
 
+def run_verification(command):
+    """Run the task's verify command for real and judge it by exit code.
+
+    This is the harness checking the work, not the agent self-reporting on
+    it — the distinction that was missing before (the Phase 4 LICENSE run
+    reported success while the content was actually wrong).
+    """
+    result = subprocess.run(
+        command, shell=True, cwd=WORKDIR, capture_output=True, text=True, timeout=30
+    )
+    output = f"exit code: {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return result.returncode == 0, output
+
+
+def handle_task_completion(task):
+    """Decide whether a finished task gets checked off and committed.
+
+    Returns (True, None) if it was (verification passed, or no verify
+    command was defined for the task). Returns (False, output) if
+    verification ran and failed — `output` is the verification command's
+    report, which the caller can feed back into a retry.
+    """
+    if task["verify"]:
+        passed, output = run_verification(task["verify"])
+        log_event(
+            {
+                "task": task["text"],
+                "verify_command": task["verify"],
+                "verify_passed": passed,
+                "verify_output": output[:1000],
+            }
+        )
+        if not passed:
+            print(f"\n=== VERIFICATION FAILED for task: {task['text']} ===")
+            print(output)
+            return False, output
+        print(f"=== Verification passed: {task['verify']} ===")
+    else:
+        print("=== WARNING: task has no verify command; checking off on trust ===")
+
+    lines, tasks_now = load_tasks()
+    fresh_task = next(t for t in tasks_now if t["line_index"] == task["line_index"])
+    mark_task_done(lines, fresh_task["line_index"])
+    commit_task(task["text"])
+    return True, None
+
+
+# A task gets one fresh instance, and if verification fails, one more fresh
+# instance told exactly why the first one failed. Past that, it's a human's
+# problem, not the loop's — unbounded auto-retry on the same broken task is
+# how a buggy spec turns into a runaway loop.
+MAX_ATTEMPTS_PER_TASK = 2
+
+
+def run_task_with_retries(task):
+    """Run a task, retrying once with failure context if verification fails.
+
+    Returns True if the task ended up checked off and committed, False if
+    every attempt was exhausted and the run should stop for human review.
+    """
+    retry_context = None
+    for attempt in range(1, MAX_ATTEMPTS_PER_TASK + 1):
+        print(
+            f"\n=== Fresh instance starting task (attempt {attempt}/"
+            f"{MAX_ATTEMPTS_PER_TASK}): {task['text']} ==="
+        )
+        run_task(task["text"], retry_context)
+        success, output = handle_task_completion(task)
+        if success:
+            print(f"=== Checked off and committed: {task['text']} ===")
+            return True
+        if attempt < MAX_ATTEMPTS_PER_TASK:
+            retry_context = output or "Previous attempt did not finish successfully."
+            print("=== Retrying with a fresh instance, given the failure above ===")
+
+    print(
+        f"=== Giving up on task after {MAX_ATTEMPTS_PER_TASK} attempts: "
+        f"{task['text']} — stopping run for human review ==="
+    )
+    return False
+
+
 def main():
     for _ in range(MAX_TASKS_PER_RUN):
         lines, tasks = load_tasks()
@@ -230,13 +375,8 @@ def main():
             break
 
         task = pending[0]
-        print(f"\n=== Fresh instance starting task: {task['text']} ===")
-        run_task(task["text"])
-
-        lines, _ = load_tasks()  # re-read in case the task itself edited spec.md
-        mark_task_done(lines, task["line_index"])
-        commit_task(task["text"])
-        print(f"=== Checked off and committed: {task['text']} ===")
+        if not run_task_with_retries(task):
+            break
 
 
 if __name__ == "__main__":
