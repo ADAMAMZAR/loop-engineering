@@ -8,3 +8,6 @@ ralph_audit.jsonl
 test_ralph_audit.jsonl
 real_repo_audit.jsonl
 .claude/
+*.egg-info/
+build/
+dist/

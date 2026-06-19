@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-from-scratch"
+version = "0.1.0"
+description = "A tiny coding agent built up in phases: harness and loop included."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai==2.41.1",
+    "python-dotenv==1.0.1",
+]
+
+[project.scripts]
+agent-harness = "safe_harness:main"
+agent-ralph = "ralph_loop:main"
+agent-real-repo = "real_repo_loop:main"
+agent-audit = "audit_replay:main"
+
+[tool.setuptools]
+py-modules = [
+    "single_tool_call",
+    "agent_loop",
+    "safe_harness",
+    "ralph_loop",
+    "real_repo_loop",
+    "audit_replay",
+]

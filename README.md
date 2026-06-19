@@ -18,12 +18,13 @@ last.
 | [`spec.md`](spec.md) | 3 | Task checklist `ralph_loop.py` reads from and checks off. |
 | [`test_ralph_verification.py`](test_ralph_verification.py) | 3 | Unit tests for the verification gate and retry logic. |
 | [`test_run_shell_sandbox.py`](test_run_shell_sandbox.py) | 2 | Unit tests for the `run_shell` allowlist/sandbox. |
-| [`audit_replay.py`](audit_replay.py) | 2 | Query/pretty-print any audit log JSONL file (`python audit_replay.py audit_log.jsonl --tool write_file`). |
+| [`audit_replay.py`](audit_replay.py) | 2 | Query/pretty-print any audit log JSONL file (`python audit_replay.py audit_log.jsonl --tool write_file`, or `agent-audit audit_log.jsonl --tool write_file`). |
 | [`test_audit_replay.py`](test_audit_replay.py) | 2 | Unit tests for `audit_replay.py`'s filtering and formatting. |
 | [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
 | [`test_cli_args.py`](test_cli_args.py) | — | Unit tests for each script's CLI argument parsing. |
 | [`test_api_error_handling.py`](test_api_error_handling.py) | — | Unit tests for the missing-API-key check and the wrapped chat-completion call. |
 | [`requirements.txt`](requirements.txt) | — | Pinned dependency versions. |
+| [`pyproject.toml`](pyproject.toml) | — | Makes the project pip-installable and registers the `agent-harness`/`agent-ralph`/`agent-real-repo`/`agent-audit` console commands. |
 | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | — | CI: runs the full test suite on every push/PR. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
@@ -32,8 +33,18 @@ last.
 ```bash
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
+
+This installs the project itself (via `pyproject.toml`), not just its
+dependencies, and registers four console commands you can run from anywhere
+— `agent-harness`, `agent-ralph`, `agent-real-repo`, `agent-audit` — instead
+of needing to `cd` into this directory and run `python some_script.py`. They
+each accept the same arguments as their `python <script>.py` equivalent
+below (e.g. `agent-harness "fix the bug in parser.py"`,
+`agent-ralph --spec other_tasks.md`). If you'd rather not install the
+package, `pip install -r requirements.txt` plus `python <script>.py` still
+works exactly as before.
 
 Create a `.env` file in the project root:
 
@@ -100,8 +111,9 @@ before it gets caught by you running the script live.
     the log existing only to be read by eye. Covered by
     `test_audit_replay.py`.
 
-  Run it with `python safe_harness.py "your goal here"` — the goal is a
-  CLI argument, not something you edit into the script. Omit it to run
+  Run it with `python safe_harness.py "your goal here"` (or, if you ran
+  `pip install -e .`, just `agent-harness "your goal here"`) — the goal is
+  a CLI argument, not something you edit into the script. Omit it to run
   the built-in demo task.
 
 - [x] **Phase 3 — Loop engineering: make it autonomous** (`ralph_loop.py`)
@@ -143,9 +155,10 @@ before it gets caught by you running the script live.
   visible before the run begins rather than discovered task-by-task once
   it's already underway. Covered by `test_ralph_verification.py`.
 
-  Run it with `python ralph_loop.py`, or point it at a different task
-  file with `python ralph_loop.py --spec other_tasks.md` — no code
-  editing needed to change which checklist it works through.
+  Run it with `python ralph_loop.py` (or `agent-ralph`), or point it at a
+  different task file with `python ralph_loop.py --spec other_tasks.md`
+  (or `agent-ralph --spec other_tasks.md`) — no code editing needed to
+  change which checklist it works through.
 
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
   A single narrow goal (add a LICENSE file) run against this actual repo,
@@ -155,8 +168,9 @@ before it gets caught by you running the script live.
   word `PUSH` to confirm — generic `y` isn't enough for the one action
   that's hard to take back.
 
-  Run it with `python real_repo_loop.py "your goal here"`. Omit the goal
-  to run the built-in MIT-license demo goal.
+  Run it with `python real_repo_loop.py "your goal here"` (or
+  `agent-real-repo "your goal here"`). Omit the goal to run the built-in
+  MIT-license demo goal.
 
 ## Phase 0 — what to look for when you run it
 
