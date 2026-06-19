@@ -1,8 +1,37 @@
 import os
+import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import ralph_loop
+
+
+def _tool_call_response(name="write_file", args=None, call_id="call_1"):
+    """Build a fake chat-completion response carrying one tool call."""
+    tool_call = MagicMock()
+    tool_call.id = call_id
+    tool_call.function.name = name
+    tool_call.function.arguments = json.dumps(args or {"path": "x.txt", "content": "x"})
+
+    message = MagicMock()
+    message.content = None
+    message.tool_calls = [tool_call]
+    message.model_dump.return_value = {"role": "assistant", "tool_calls": [tool_call]}
+
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+    return response
+
+
+def _final_response(content="all done"):
+    message = MagicMock()
+    message.content = content
+    message.tool_calls = None
+    message.model_dump.return_value = {"role": "assistant", "content": content}
+
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+    return response
 
 
 SPEC_WITH_VERIFY = """# spec
@@ -29,6 +58,58 @@ class TestParseTasks(unittest.TestCase):
     def test_task_without_verify_line_has_none(self):
         tasks = ralph_loop.parse_tasks(SPEC_WITH_VERIFY.splitlines(keepends=True))
         self.assertIsNone(tasks[2]["verify"])
+
+
+class TestRunTaskNonConvergence(unittest.TestCase):
+    """run_task talks to a mocked client/tool executor so no real API call
+    or file write happens — only the loop's own convergence logic is under
+    test here.
+    """
+
+    @patch("ralph_loop.execute_tool_call")
+    @patch("ralph_loop.client")
+    def test_completes_normally_when_model_stops_requesting_tools(
+        self, mock_client, mock_execute
+    ):
+        mock_client.chat.completions.create.return_value = _final_response("Task complete.")
+
+        outcome, detail = ralph_loop.run_task("some task")
+
+        self.assertEqual(outcome, "completed")
+        self.assertEqual(detail, "Task complete.")
+        mock_execute.assert_not_called()
+
+    @patch("ralph_loop.execute_tool_call")
+    @patch("ralph_loop.client")
+    def test_stuck_on_repeated_identical_tool_call(self, mock_client, mock_execute):
+        mock_client.chat.completions.create.return_value = _tool_call_response()
+        mock_execute.return_value = "Error: something went wrong"
+
+        outcome, detail = ralph_loop.run_task("some task")
+
+        self.assertEqual(outcome, "stuck")
+        self.assertIn("Error: something went wrong", detail)
+        self.assertEqual(
+            mock_client.chat.completions.create.call_count, ralph_loop.STUCK_REPEAT_THRESHOLD
+        )
+
+    @patch("ralph_loop.execute_tool_call")
+    @patch("ralph_loop.client")
+    def test_max_iterations_when_never_stuck_but_never_finishes(
+        self, mock_client, mock_execute
+    ):
+        # Vary the tool call's args each time so the "stuck" detector never
+        # fires, but the model also never stops requesting tools.
+        n = ralph_loop.MAX_ITERATIONS_PER_TASK
+        mock_client.chat.completions.create.side_effect = [
+            _tool_call_response(args={"path": f"f{i}.txt", "content": "x"}) for i in range(n)
+        ]
+        mock_execute.side_effect = [f"Wrote {i} characters" for i in range(n)]
+
+        outcome, detail = ralph_loop.run_task("some task")
+
+        self.assertEqual(outcome, "max_iterations")
+        self.assertEqual(mock_client.chat.completions.create.call_count, n)
 
 
 class TestRunVerification(unittest.TestCase):
@@ -106,6 +187,7 @@ class TestRunTaskWithRetries(unittest.TestCase):
     @patch("ralph_loop.run_task")
     def test_succeeds_on_first_attempt_without_retry(self, mock_run_task, mock_handle):
         task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.return_value = ("completed", "done")
         mock_handle.return_value = (True, None)
 
         result = ralph_loop.run_task_with_retries(task)
@@ -119,6 +201,7 @@ class TestRunTaskWithRetries(unittest.TestCase):
         self, mock_run_task, mock_handle
     ):
         task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.return_value = ("completed", "done")
         mock_handle.side_effect = [(False, "exit code: 1\nstderr:\nboom"), (True, None)]
 
         result = ralph_loop.run_task_with_retries(task)
@@ -134,12 +217,45 @@ class TestRunTaskWithRetries(unittest.TestCase):
     @patch("ralph_loop.run_task")
     def test_gives_up_after_max_attempts(self, mock_run_task, mock_handle):
         task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.return_value = ("completed", "done")
         mock_handle.return_value = (False, "still failing")
 
         result = ralph_loop.run_task_with_retries(task)
 
         self.assertFalse(result)
         self.assertEqual(mock_run_task.call_count, ralph_loop.MAX_ATTEMPTS_PER_TASK)
+
+    @patch("ralph_loop.handle_task_completion")
+    @patch("ralph_loop.run_task")
+    def test_non_convergence_retries_with_reason_then_succeeds(
+        self, mock_run_task, mock_handle
+    ):
+        task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.side_effect = [
+            ("stuck", "Stuck: write_file repeated the same failing result"),
+            ("completed", "done"),
+        ]
+        mock_handle.return_value = (True, None)
+
+        result = ralph_loop.run_task_with_retries(task)
+
+        self.assertTrue(result)
+        self.assertEqual(mock_run_task.call_count, 2)
+        second_call_args = mock_run_task.call_args_list[1].args
+        self.assertIn("Stuck", second_call_args[1])
+        mock_handle.assert_called_once()  # not called for the non-converged attempt
+
+    @patch("ralph_loop.handle_task_completion")
+    @patch("ralph_loop.run_task")
+    def test_non_convergence_on_every_attempt_gives_up(self, mock_run_task, mock_handle):
+        task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.return_value = ("max_iterations", "Hit the iteration cap")
+
+        result = ralph_loop.run_task_with_retries(task)
+
+        self.assertFalse(result)
+        self.assertEqual(mock_run_task.call_count, ralph_loop.MAX_ATTEMPTS_PER_TASK)
+        mock_handle.assert_not_called()
 
 
 if __name__ == "__main__":

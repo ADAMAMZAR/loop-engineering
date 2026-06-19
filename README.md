@@ -81,7 +81,15 @@ providers.
   fresh instance (still memory-free of other tasks) is told what the
   verification command reported and asked to fix it. If that second
   attempt also fails, the run stops there for a human to look at, rather
-  than auto-retrying forever on a broken task. Covered by
+  than auto-retrying forever on a broken task.
+
+  Each task's own tool-calling loop is also bounded independently of the
+  per-run task cap: it gives up early as "stuck" if the same tool call
+  produces the same result several times in a row, and as
+  "max_iterations" if it just never finishes in `MAX_ITERATIONS_PER_TASK`
+  calls. Either case counts as a failed attempt and feeds the same
+  one-retry path above, instead of silently burning the whole task budget
+  on a loop that was never going to converge. Covered by
   `test_ralph_verification.py`.
 
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)

@@ -177,6 +177,13 @@ def execute_tool_call(tool_call):
     return str(result)
 
 
+# Safety stops for a single task's own tool-calling loop, independent of
+# MAX_TASKS_PER_RUN (which bounds how many *tasks* one run attempts). These
+# bound how much one *task* can spin before something is clearly wrong.
+MAX_ITERATIONS_PER_TASK = 15
+STUCK_REPEAT_THRESHOLD = 3
+
+
 def run_task(task_text, retry_context=None):
     """One fresh, stateless agent instance implementing a single spec task.
 
@@ -186,10 +193,20 @@ def run_task(task_text, retry_context=None):
     actually got committed). That's the externally-persisted state the
     Ralph pattern relies on instead of a long-lived conversation.
 
-    `retry_context`, when set, is the verification failure output from a
-    previous attempt at this same task. The new instance still starts with
-    zero memory of *other* tasks — it just gets told why the last attempt
-    at *this* task didn't pass, so a retry isn't a blind repeat.
+    `retry_context`, when set, is the failure detail (verification output,
+    or a non-convergence reason) from a previous attempt at this same
+    task. The new instance still starts with zero memory of *other*
+    tasks — it just gets told why the last attempt at *this* task didn't
+    pass, so a retry isn't a blind repeat.
+
+    Returns (outcome, detail):
+      - ("completed", message_content) — the model stopped requesting tools.
+      - ("stuck", reason) — the same tool call produced the same result
+        STUCK_REPEAT_THRESHOLD times in a row; continuing would just burn
+        more calls on a loop that isn't going anywhere.
+      - ("max_iterations", reason) — hit MAX_ITERATIONS_PER_TASK without
+        finishing, e.g. a task that's too large or too ambiguous for one
+        pass.
     """
     prompt = (
         f"Implement this task from spec.md: {task_text}\n\n"
@@ -199,12 +216,14 @@ def run_task(task_text, retry_context=None):
     )
     if retry_context:
         prompt += (
-            "\n\nA previous attempt at this exact task failed verification. "
-            f"Here is what the verification command reported:\n{retry_context}\n\n"
+            "\n\nA previous attempt at this exact task did not succeed. "
+            f"Here is what happened:\n{retry_context}\n\n"
             "Diagnose and fix the underlying issue, then try again."
         )
     messages = [{"role": "user", "content": prompt}]
-    while True:
+    recent_calls = []
+
+    for _ in range(MAX_ITERATIONS_PER_TASK):
         response = client.chat.completions.create(
             model=MODEL,
             max_tokens=1024,
@@ -218,7 +237,7 @@ def run_task(task_text, retry_context=None):
             print(f"\n--- assistant says ---\n{message.content}")
 
         if not message.tool_calls:
-            return message.content
+            return "completed", message.content
 
         for tool_call in message.tool_calls:
             result = execute_tool_call(tool_call)
@@ -229,6 +248,23 @@ def run_task(task_text, retry_context=None):
                     "content": result,
                 }
             )
+
+            recent_calls.append((tool_call.function.name, tool_call.function.arguments, result))
+            if (
+                len(recent_calls) >= STUCK_REPEAT_THRESHOLD
+                and len(set(recent_calls[-STUCK_REPEAT_THRESHOLD:])) == 1
+            ):
+                reason = (
+                    f"Stuck: {tool_call.function.name} was called with the same "
+                    f"arguments and produced the same result {STUCK_REPEAT_THRESHOLD} "
+                    f"times in a row. Last result:\n{result}"
+                )
+                print(f"\n=== NON-CONVERGENCE DETECTED ===\n{reason}")
+                return "stuck", reason
+
+    reason = f"Hit the {MAX_ITERATIONS_PER_TASK}-iteration cap without finishing this task."
+    print(f"\n=== NON-CONVERGENCE DETECTED ===\n{reason}")
+    return "max_iterations", reason
 
 
 TASK_LINE_RE = re.compile(r"^- \[( |x)\] (.+)$")
@@ -350,7 +386,22 @@ def run_task_with_retries(task):
             f"\n=== Fresh instance starting task (attempt {attempt}/"
             f"{MAX_ATTEMPTS_PER_TASK}): {task['text']} ==="
         )
-        run_task(task["text"], retry_context)
+        outcome, detail = run_task(task["text"], retry_context)
+
+        if outcome != "completed":
+            log_event(
+                {"task": task["text"], "non_convergence": outcome, "detail": str(detail)[:1000]}
+            )
+            if attempt < MAX_ATTEMPTS_PER_TASK:
+                retry_context = detail
+                print("=== Retrying with a fresh instance, given the failure above ===")
+                continue
+            print(
+                f"=== Giving up on task after {MAX_ATTEMPTS_PER_TASK} attempts "
+                f"(last failure: {outcome}): {task['text']} — stopping run for human review ==="
+            )
+            return False
+
         success, output = handle_task_completion(task)
         if success:
             print(f"=== Checked off and committed: {task['text']} ===")
