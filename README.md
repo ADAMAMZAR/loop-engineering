@@ -1,5 +1,7 @@
 # Agent From Scratch
 
+[![Tests](https://github.com/ADAMAMZAR/loop-engineering/actions/workflows/tests.yml/badge.svg)](https://github.com/ADAMAMZAR/loop-engineering/actions/workflows/tests.yml)
+
 A learning project: build a tiny coding agent — harness and loop included —
 from a single API call up to something that can autonomously work a real
 GitHub repo. Each phase is a standalone, runnable script that builds on the
@@ -22,6 +24,7 @@ last.
 | [`test_cli_args.py`](test_cli_args.py) | — | Unit tests for each script's CLI argument parsing. |
 | [`test_api_error_handling.py`](test_api_error_handling.py) | — | Unit tests for the missing-API-key check and the wrapped chat-completion call. |
 | [`requirements.txt`](requirements.txt) | — | Pinned dependency versions. |
+| [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | — | CI: runs the full test suite on every push/PR. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -51,6 +54,18 @@ stopping condition rather than an unhandled stack trace — `ralph_loop.py`
 treats it like a run-wide failure (not retried, since the next call would
 likely fail the same way) and `safe_harness.py`/`real_repo_loop.py` stop the
 loop cleanly. Covered by `test_api_error_handling.py`.
+
+## Tests
+
+```bash
+python -m unittest test_ralph_verification test_run_shell_sandbox test_audit_replay test_cli_args test_api_error_handling
+```
+
+None of these tests make a real API call or need `GOOGLE_API_KEY` set — every
+OpenAI response is mocked. A GitHub Actions workflow
+(`.github/workflows/tests.yml`) runs this same command on every push and pull
+request against Python 3.11 and 3.13, so a regression gets caught by CI
+before it gets caught by you running the script live.
 
 ## Roadmap
 
