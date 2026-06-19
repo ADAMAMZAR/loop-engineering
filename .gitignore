@@ -3,4 +3,4 @@ venv/
 __pycache__/
 *.pyc
 summary.txt
-phase2_audit.log
+audit_log.jsonl

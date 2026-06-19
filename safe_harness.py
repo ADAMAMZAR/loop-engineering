@@ -28,7 +28,7 @@ WORKDIR = os.path.abspath(os.path.dirname(__file__))
 READ_ONLY_TOOLS = {"read_file", "list_dir"}
 MUTATING_TOOLS = {"write_file", "run_shell"}
 
-AUDIT_LOG_PATH = os.path.join(WORKDIR, "phase2_audit.log")
+AUDIT_LOG_PATH = os.path.join(WORKDIR, "audit_log.jsonl")
 
 tools = [
     {
