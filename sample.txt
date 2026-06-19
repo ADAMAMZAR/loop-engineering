@@ -1,0 +1,7 @@
+This is a test file for your agent-from-scratch project.
+
+If your agent can tell you what's written here, Phase 0 worked:
+the tool-use request/response cycle is functioning correctly.
+
+Fun fact: subnetting a /24 network into four equal subnets
+gives you four /26 networks, each with 64 addresses (62 usable).
