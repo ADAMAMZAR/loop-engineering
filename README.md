@@ -60,6 +60,10 @@ providers.
     have nothing to interpret them, so they end up as inert literal
     arguments instead of chained commands. Covered by
     `test_run_shell_sandbox.py`.
+  - a blast-radius cap: the main loop is bounded at `MAX_ITERATIONS`
+    iterations and `MAX_TOKENS_PER_RUN` tokens, so a model that keeps
+    requesting tools forever can't loop — or spend — without limit, even
+    if every individual tool call gets approved.
   - an audit log (every tool call and decision written to `audit_log.jsonl`,
     one JSON line each, replayable)
 
@@ -89,8 +93,13 @@ providers.
   "max_iterations" if it just never finishes in `MAX_ITERATIONS_PER_TASK`
   calls. Either case counts as a failed attempt and feeds the same
   one-retry path above, instead of silently burning the whole task budget
-  on a loop that was never going to converge. Covered by
-  `test_ralph_verification.py`.
+  on a loop that was never going to converge.
+
+  A `MAX_TOKENS_PER_RUN` budget is also tracked across the *entire run*
+  (every task, every attempt, every iteration). If a run goes over it,
+  `run_task` stops immediately rather than making another API call, and
+  that failure is never retried — retrying would just spend more of a
+  budget that's already gone. Covered by `test_ralph_verification.py`.
 
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
   A single narrow goal (add a LICENSE file) run against this actual repo,

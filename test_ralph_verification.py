@@ -20,6 +20,7 @@ def _tool_call_response(name="write_file", args=None, call_id="call_1"):
 
     response = MagicMock()
     response.choices = [MagicMock(message=message)]
+    response.usage.total_tokens = 10
     return response
 
 
@@ -31,6 +32,7 @@ def _final_response(content="all done"):
 
     response = MagicMock()
     response.choices = [MagicMock(message=message)]
+    response.usage.total_tokens = 10
     return response
 
 
@@ -58,6 +60,57 @@ class TestParseTasks(unittest.TestCase):
     def test_task_without_verify_line_has_none(self):
         tasks = ralph_loop.parse_tasks(SPEC_WITH_VERIFY.splitlines(keepends=True))
         self.assertIsNone(tasks[2]["verify"])
+
+
+class TestTokenBudget(unittest.TestCase):
+    def setUp(self):
+        self._original_total = ralph_loop.total_tokens_used
+        self._original_max = ralph_loop.MAX_TOKENS_PER_RUN
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        ralph_loop.total_tokens_used = self._original_total
+        ralph_loop.MAX_TOKENS_PER_RUN = self._original_max
+
+    def test_record_usage_accumulates_and_flags_when_exceeded(self):
+        ralph_loop.total_tokens_used = 0
+        ralph_loop.MAX_TOKENS_PER_RUN = 100
+
+        response = MagicMock()
+        response.usage.total_tokens = 60
+        self.assertFalse(ralph_loop.record_usage(response))  # 60/100, still under
+
+        response.usage.total_tokens = 50
+        self.assertTrue(ralph_loop.record_usage(response))  # 110/100, now over
+
+    @patch("ralph_loop.execute_tool_call")
+    @patch("ralph_loop.client")
+    def test_run_task_stops_on_first_call_once_budget_exceeded(
+        self, mock_client, mock_execute
+    ):
+        ralph_loop.total_tokens_used = 0
+        ralph_loop.MAX_TOKENS_PER_RUN = 5
+        mock_client.chat.completions.create.return_value = _tool_call_response()
+
+        outcome, detail = ralph_loop.run_task("some task")
+
+        self.assertEqual(outcome, "budget_exceeded")
+        self.assertEqual(mock_client.chat.completions.create.call_count, 1)
+        mock_execute.assert_not_called()  # never even reached the tool-call handling
+
+    @patch("ralph_loop.handle_task_completion")
+    @patch("ralph_loop.run_task")
+    def test_run_task_with_retries_does_not_retry_on_budget_exceeded(
+        self, mock_run_task, mock_handle
+    ):
+        task = {"line_index": 0, "done": False, "text": "Do thing", "verify": "cmd"}
+        mock_run_task.return_value = ("budget_exceeded", "out of tokens")
+
+        result = ralph_loop.run_task_with_retries(task)
+
+        self.assertFalse(result)
+        mock_run_task.assert_called_once()  # no retry burns more budget
+        mock_handle.assert_not_called()
 
 
 class TestRunTaskNonConvergence(unittest.TestCase):

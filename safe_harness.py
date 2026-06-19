@@ -191,6 +191,23 @@ def execute_tool_call(tool_call):
     return str(result)
 
 
+# Bounds on the run as a whole, independent of the per-tool approval gate:
+# a model that keeps requesting (approved or auto-run) tools forever would
+# otherwise loop — and spend — without limit. These are the harness's own
+# blast-radius limit, not something the model can be talked past.
+MAX_ITERATIONS = 20
+MAX_TOKENS_PER_RUN = 50_000
+
+
+def record_usage(response, tokens_used):
+    """Add this response's token usage to the running total. Returns the
+    new total; the caller decides what to do once it exceeds the budget.
+    """
+    usage = getattr(response, "usage", None)
+    tokens = getattr(usage, "total_tokens", 0) if usage else 0
+    return tokens_used + tokens
+
+
 def main():
     messages = [
         {
@@ -202,13 +219,22 @@ def main():
         }
     ]
 
-    while True:
+    tokens_used = 0
+    for iteration in range(1, MAX_ITERATIONS + 1):
         response = client.chat.completions.create(
             model=MODEL,
             max_tokens=1024,
             tools=tools,
             messages=messages,
         )
+        tokens_used = record_usage(response, tokens_used)
+        if tokens_used > MAX_TOKENS_PER_RUN:
+            print(
+                f"\n--- stopping: token budget exceeded "
+                f"({tokens_used}/{MAX_TOKENS_PER_RUN}) ---"
+            )
+            break
+
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
 
@@ -228,6 +254,8 @@ def main():
                     "content": result,
                 }
             )
+    else:
+        print(f"\n--- stopping: hit the {MAX_ITERATIONS}-iteration cap ---")
 
 
 if __name__ == "__main__":

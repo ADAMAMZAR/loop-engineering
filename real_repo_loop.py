@@ -213,16 +213,38 @@ def execute_tool_call(tool_call):
     return str(result)
 
 
+# Same blast-radius reasoning as safe_harness.py, raised slightly higher
+# here since the goal genuinely needs several sequential tool calls
+# (write LICENSE, git add, git commit, git push) on top of any exploration.
+MAX_ITERATIONS = 20
+MAX_TOKENS_PER_RUN = 50_000
+
+
+def record_usage(response, tokens_used):
+    usage = getattr(response, "usage", None)
+    tokens = getattr(usage, "total_tokens", 0) if usage else 0
+    return tokens_used + tokens
+
+
 def main():
     messages = [{"role": "user", "content": GOAL}]
 
-    while True:
+    tokens_used = 0
+    for iteration in range(1, MAX_ITERATIONS + 1):
         response = client.chat.completions.create(
             model=MODEL,
             max_tokens=1024,
             tools=tools,
             messages=messages,
         )
+        tokens_used = record_usage(response, tokens_used)
+        if tokens_used > MAX_TOKENS_PER_RUN:
+            print(
+                f"\n--- stopping: token budget exceeded "
+                f"({tokens_used}/{MAX_TOKENS_PER_RUN}) ---"
+            )
+            break
+
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
 
@@ -242,6 +264,8 @@ def main():
                     "content": result,
                 }
             )
+    else:
+        print(f"\n--- stopping: hit the {MAX_ITERATIONS}-iteration cap ---")
 
 
 if __name__ == "__main__":

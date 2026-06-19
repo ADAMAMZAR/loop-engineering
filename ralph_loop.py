@@ -183,6 +183,26 @@ def execute_tool_call(tool_call):
 MAX_ITERATIONS_PER_TASK = 15
 STUCK_REPEAT_THRESHOLD = 3
 
+# Token budget across the *entire run* — all tasks, all attempts, all
+# iterations. This is the outermost blast-radius limit: even if every task
+# and retry stays within its own cap, a run that's just doing a lot of
+# legitimate work could still spend more than intended. This is checked
+# and accumulated globally rather than per-task because the budget is
+# meant to bound one invocation of this script, not one task within it.
+MAX_TOKENS_PER_RUN = 100_000
+total_tokens_used = 0
+
+
+def record_usage(response):
+    """Add this response's token usage to the run-wide total. Returns True
+    once the run-wide budget has been exceeded.
+    """
+    global total_tokens_used
+    usage = getattr(response, "usage", None)
+    tokens = getattr(usage, "total_tokens", 0) if usage else 0
+    total_tokens_used += tokens
+    return total_tokens_used > MAX_TOKENS_PER_RUN
+
 
 def run_task(task_text, retry_context=None):
     """One fresh, stateless agent instance implementing a single spec task.
@@ -207,6 +227,10 @@ def run_task(task_text, retry_context=None):
       - ("max_iterations", reason) — hit MAX_ITERATIONS_PER_TASK without
         finishing, e.g. a task that's too large or too ambiguous for one
         pass.
+      - ("budget_exceeded", reason) — the run-wide token budget
+        (MAX_TOKENS_PER_RUN) has been used up. Unlike the other two
+        outcomes, the caller should not retry this — retrying would just
+        spend more of a budget that's already gone.
     """
     prompt = (
         f"Implement this task from spec.md: {task_text}\n\n"
@@ -230,6 +254,15 @@ def run_task(task_text, retry_context=None):
             tools=tools,
             messages=messages,
         )
+
+        if record_usage(response):
+            reason = (
+                f"Run-wide token budget exceeded ({total_tokens_used}/"
+                f"{MAX_TOKENS_PER_RUN} tokens used). Stopping before any more API calls."
+            )
+            print(f"\n=== TOKEN BUDGET EXCEEDED ===\n{reason}")
+            return "budget_exceeded", reason
+
         message = response.choices[0].message
         messages.append(message.model_dump(exclude_none=True))
 
@@ -387,6 +420,13 @@ def run_task_with_retries(task):
             f"{MAX_ATTEMPTS_PER_TASK}): {task['text']} ==="
         )
         outcome, detail = run_task(task["text"], retry_context)
+
+        if outcome == "budget_exceeded":
+            log_event(
+                {"task": task["text"], "non_convergence": outcome, "detail": str(detail)[:1000]}
+            )
+            print(f"=== Stopping entire run, not just this task: {detail} ===")
+            return False
 
         if outcome != "completed":
             log_event(
