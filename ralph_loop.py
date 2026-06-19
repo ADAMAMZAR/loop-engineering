@@ -457,7 +457,29 @@ def run_task_with_retries(task):
     return False
 
 
+def warn_about_missing_verify(tasks):
+    """Surface, up front, which pending tasks will be checked off on trust.
+
+    A task without a verify command isn't blocked from running — that
+    would defeat the point of an autonomous loop on a spec that's still
+    being written — but a human glancing at spec.md before kicking off a
+    run should see the gap immediately, not discover it task-by-task once
+    the run is already underway.
+    """
+    missing = [t for t in tasks if not t["done"] and not t["verify"]]
+    if missing:
+        print(
+            "\n=== WARNING: these pending tasks have no verify command and "
+            "will be checked off on trust if reached: ==="
+        )
+        for t in missing:
+            print(f"  - {t['text']}")
+
+
 def main():
+    _, all_tasks = load_tasks()
+    warn_about_missing_verify(all_tasks)
+
     for _ in range(MAX_TASKS_PER_RUN):
         lines, tasks = load_tasks()
         pending = [t for t in tasks if not t["done"]]

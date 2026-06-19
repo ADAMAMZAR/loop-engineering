@@ -1,5 +1,7 @@
+import io
 import os
 import json
+import contextlib
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -60,6 +62,30 @@ class TestParseTasks(unittest.TestCase):
     def test_task_without_verify_line_has_none(self):
         tasks = ralph_loop.parse_tasks(SPEC_WITH_VERIFY.splitlines(keepends=True))
         self.assertIsNone(tasks[2]["verify"])
+
+
+class TestWarnAboutMissingVerify(unittest.TestCase):
+    def test_warns_for_pending_tasks_without_verify(self):
+        tasks = ralph_loop.parse_tasks(SPEC_WITH_VERIFY.splitlines(keepends=True))
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ralph_loop.warn_about_missing_verify(tasks)
+
+        self.assertIn("No verify command here", buf.getvalue())
+        self.assertNotIn("Do thing one", buf.getvalue())  # has a verify command
+
+    def test_no_warning_when_all_pending_tasks_have_verify(self):
+        tasks = [
+            {"line_index": 0, "done": False, "text": "A", "verify": "cmd"},
+            {"line_index": 1, "done": True, "text": "B", "verify": None},
+        ]
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ralph_loop.warn_about_missing_verify(tasks)
+
+        self.assertEqual(buf.getvalue(), "")
 
 
 class TestTokenBudget(unittest.TestCase):

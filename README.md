@@ -16,6 +16,8 @@ last.
 | [`spec.md`](spec.md) | 3 | Task checklist `ralph_loop.py` reads from and checks off. |
 | [`test_ralph_verification.py`](test_ralph_verification.py) | 3 | Unit tests for the verification gate and retry logic. |
 | [`test_run_shell_sandbox.py`](test_run_shell_sandbox.py) | 2 | Unit tests for the `run_shell` allowlist/sandbox. |
+| [`audit_replay.py`](audit_replay.py) | 2 | Query/pretty-print any audit log JSONL file (`python audit_replay.py audit_log.jsonl --tool write_file`). |
+| [`test_audit_replay.py`](test_audit_replay.py) | 2 | Unit tests for `audit_replay.py`'s filtering and formatting. |
 | [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
@@ -64,6 +66,10 @@ providers.
     iterations and `MAX_TOKENS_PER_RUN` tokens, so a model that keeps
     requesting tools forever can't loop — or spend — without limit, even
     if every individual tool call gets approved.
+  - an audit log that's actually queryable: `audit_replay.py` reads any of
+    this project's JSONL audit logs and filters by tool, decision, task
+    text, or timestamp range, instead of the log existing only to be read
+    by eye. Covered by `test_audit_replay.py`.
   - an audit log (every tool call and decision written to `audit_log.jsonl`,
     one JSON line each, replayable)
 
@@ -99,7 +105,12 @@ providers.
   (every task, every attempt, every iteration). If a run goes over it,
   `run_task` stops immediately rather than making another API call, and
   that failure is never retried — retrying would just spend more of a
-  budget that's already gone. Covered by `test_ralph_verification.py`.
+  budget that's already gone.
+
+  Before a run starts, it also scans `spec.md` for any pending task with
+  no verify command and prints them up front, so a gap in the spec is
+  visible before the run begins rather than discovered task-by-task once
+  it's already underway. Covered by `test_ralph_verification.py`.
 
 - [x] **Phase 4 — Point it at something real** (`real_repo_loop.py`)
   A single narrow goal (add a LICENSE file) run against this actual repo,
