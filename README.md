@@ -20,6 +20,8 @@ last.
 | [`test_audit_replay.py`](test_audit_replay.py) | 2 | Unit tests for `audit_replay.py`'s filtering and formatting. |
 | [`real_repo_loop.py`](real_repo_loop.py) | 4 | Single narrow goal against this real repo, approval-gated, with a stricter second gate before `git push`. |
 | [`test_cli_args.py`](test_cli_args.py) | — | Unit tests for each script's CLI argument parsing. |
+| [`test_api_error_handling.py`](test_api_error_handling.py) | — | Unit tests for the missing-API-key check and the wrapped chat-completion call. |
+| [`requirements.txt`](requirements.txt) | — | Pinned dependency versions. |
 | `sample.txt` | — | Fixture file the agent reads during demos. |
 
 ## Setup
@@ -27,7 +29,7 @@ last.
 ```bash
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
-pip install openai python-dotenv
+pip install -r requirements.txt
 ```
 
 Create a `.env` file in the project root:
@@ -40,6 +42,15 @@ Get a key from [aistudio.google.com](https://aistudio.google.com). DeepSeek
 is supported too — each script has a commented-out DeepSeek client block;
 uncomment it and set `DEEPSEEK_API_KEY` instead if you want to switch
 providers.
+
+If `GOOGLE_API_KEY` isn't set, every script checks for it before making any
+API call and exits with a clear error message instead of failing deep inside
+an HTTP request. Similarly, if the chat-completion call itself fails
+(network blip, bad key, rate limit), it's caught and reported as a normal
+stopping condition rather than an unhandled stack trace — `ralph_loop.py`
+treats it like a run-wide failure (not retried, since the next call would
+likely fail the same way) and `safe_harness.py`/`real_repo_loop.py` stop the
+loop cleanly. Covered by `test_api_error_handling.py`.
 
 ## Roadmap
 

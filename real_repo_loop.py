@@ -1,10 +1,12 @@
 import os
+import sys
 import json
 import shlex
 import argparse
 import subprocess
 import datetime
 from dotenv import load_dotenv
+import openai
 from openai import OpenAI
 
 load_dotenv()
@@ -22,6 +24,11 @@ client = OpenAI(
     api_key=os.environ.get("GOOGLE_API_KEY")
 )
 MODEL = "gemini-2.5-flash"
+
+
+def has_api_key():
+    return bool(os.environ.get("GOOGLE_API_KEY"))
+
 
 WORKDIR = os.path.abspath(os.path.dirname(__file__))
 AUDIT_LOG_PATH = os.path.join(WORKDIR, "real_repo_audit.jsonl")
@@ -243,18 +250,39 @@ def record_usage(response, tokens_used):
     return tokens_used + tokens
 
 
+def call_model(messages):
+    """Wrap the chat-completion call so a network/auth/rate-limit failure
+    comes back as data (response, error) instead of an unhandled exception
+    that would crash the run with a raw stack trace.
+    """
+    try:
+        return client.chat.completions.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        ), None
+    except openai.APIError as e:
+        return None, str(e)
+
+
 def main():
+    if not has_api_key():
+        print(
+            "Error: GOOGLE_API_KEY is not set. Add it to a .env file in the "
+            "project root, or export it in your shell, before running this script."
+        )
+        sys.exit(1)
+
     args = build_arg_parser().parse_args()
     messages = [{"role": "user", "content": args.goal}]
 
     tokens_used = 0
     for iteration in range(1, MAX_ITERATIONS + 1):
-        response = client.chat.completions.create(
-            model=MODEL,
-            max_tokens=1024,
-            tools=tools,
-            messages=messages,
-        )
+        response, error = call_model(messages)
+        if error:
+            print(f"\n--- stopping: API call failed: {error} ---")
+            break
         tokens_used = record_usage(response, tokens_used)
         if tokens_used > MAX_TOKENS_PER_RUN:
             print(

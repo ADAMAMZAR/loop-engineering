@@ -1,11 +1,13 @@
 import os
 import re
+import sys
 import json
 import shlex
 import argparse
 import subprocess
 import datetime
 from dotenv import load_dotenv
+import openai
 from openai import OpenAI
 
 load_dotenv()
@@ -23,6 +25,11 @@ client = OpenAI(
     api_key=os.environ.get("GOOGLE_API_KEY")
 )
 MODEL = "gemini-2.5-flash"
+
+
+def has_api_key():
+    return bool(os.environ.get("GOOGLE_API_KEY"))
+
 
 WORKDIR = os.path.abspath(os.path.dirname(__file__))
 SPEC_PATH = os.path.join(WORKDIR, "spec.md")
@@ -205,6 +212,22 @@ def record_usage(response):
     return total_tokens_used > MAX_TOKENS_PER_RUN
 
 
+def call_model(messages):
+    """Wrap the chat-completion call so a network/auth/rate-limit failure
+    comes back as data (response, error) instead of an unhandled exception
+    that would crash the whole run with a raw stack trace.
+    """
+    try:
+        return client.chat.completions.create(
+            model=MODEL,
+            max_tokens=1024,
+            tools=tools,
+            messages=messages,
+        ), None
+    except openai.APIError as e:
+        return None, str(e)
+
+
 def run_task(task_text, retry_context=None):
     """One fresh, stateless agent instance implementing a single spec task.
 
@@ -232,6 +255,11 @@ def run_task(task_text, retry_context=None):
         (MAX_TOKENS_PER_RUN) has been used up. Unlike the other two
         outcomes, the caller should not retry this — retrying would just
         spend more of a budget that's already gone.
+      - ("api_error", reason) — the chat-completion call itself failed
+        (network, auth, rate limit, etc.). Like budget_exceeded, this
+        should not be retried: an error like this is unlikely to be
+        specific to this one task, so retrying just risks repeating the
+        same failure.
     """
     prompt = (
         f"Implement this task from spec.md: {task_text}\n\n"
@@ -249,12 +277,11 @@ def run_task(task_text, retry_context=None):
     recent_calls = []
 
     for _ in range(MAX_ITERATIONS_PER_TASK):
-        response = client.chat.completions.create(
-            model=MODEL,
-            max_tokens=1024,
-            tools=tools,
-            messages=messages,
-        )
+        response, error = call_model(messages)
+        if error:
+            reason = f"API call failed: {error}"
+            print(f"\n=== API ERROR ===\n{reason}")
+            return "api_error", reason
 
         if record_usage(response):
             reason = (
@@ -422,7 +449,7 @@ def run_task_with_retries(task):
         )
         outcome, detail = run_task(task["text"], retry_context)
 
-        if outcome == "budget_exceeded":
+        if outcome in ("budget_exceeded", "api_error"):
             log_event(
                 {"task": task["text"], "non_convergence": outcome, "detail": str(detail)[:1000]}
             )
@@ -494,6 +521,13 @@ def build_arg_parser():
 
 def main():
     global SPEC_PATH
+    if not has_api_key():
+        print(
+            "Error: GOOGLE_API_KEY is not set. Add it to a .env file in the "
+            "project root, or export it in your shell, before running this script."
+        )
+        sys.exit(1)
+
     args = build_arg_parser().parse_args()
     SPEC_PATH = os.path.abspath(args.spec)
 
