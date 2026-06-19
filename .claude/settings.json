@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(DEEPSEEK_API_KEY=fake_test_key ./venv/Scripts/python.exe phase1_loop.py)",
+      "Bash(node -e \"const k=process.env.DEEPSEEK_API_KEY||''; console.log\\('length:', k.length\\); console.log\\('starts:', JSON.stringify\\(k.slice\\(0,6\\)\\)\\); console.log\\('ends:', JSON.stringify\\(k.slice\\(-6\\)\\)\\);\")",
+      "Bash(python -c \"import os; k=os.environ.get\\('DEEPSEEK_API_KEY',''\\); print\\('length:', len\\(k\\)\\); print\\('starts:', repr\\(k[:6]\\)\\); print\\('ends:', repr\\(k[-6:]\\)\\)\")",
+      "Bash(./venv/Scripts/python.exe -m pip install python-dotenv)",
+      "Bash(./venv/Scripts/python.exe phase1_loop.py)",
+      "Bash(./venv/Scripts/python.exe phase0_single_call.py)",
+      "Bash(git ls-remote *)",
+      "Bash(git init *)",
+      "Bash(git branch *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git remote *)",
+      "Bash(git push *)",
+      "Bash(./venv/Scripts/python.exe -m py_compile phase2_harness.py)",
+      "Bash(./venv/Scripts/python.exe phase2_harness.py)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Bash(./venv/Scripts/python.exe -m py_compile single_tool_call.py agent_loop.py safe_harness.py)",
+      "Bash(./venv/Scripts/python.exe -m py_compile ralph_loop.py)",
+      "Bash(rm -f ralph_audit.jsonl)",
+      "Bash(./venv/Scripts/python.exe ralph_loop.py)"
+    ]
+  }
+}
